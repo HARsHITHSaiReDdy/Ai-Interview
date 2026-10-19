@@ -1,0 +1,249 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Interviewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f3f5f9;
+            color: #202938;
+        }
+
+        section {
+            background: white;
+            padding: 24px;
+            margin: 20px 0;
+            border-radius: 12px;
+        }
+
+        button {
+            padding: 12px 16px;
+            margin: 5px;
+            cursor: pointer;
+        }
+
+        textarea, input {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>AI Interviewer</h1>
+    <p>Voice-enabled technical interview</p>
+
+    <section>
+        <h2>Configure Interview</h2>
+        <label for="role">Job role</label>
+        <input id="role" value="Java Developer">
+
+        <label for="skills">Skills (comma-separated)</label>
+        <input id="skills" value="Java, SQL, OOP">
+
+        <button id="generateBtn">Generate Questions</button>
+        <p id="status">Ready</p>
+    </section>
+
+    <section>
+        <h2>Interview Question</h2>
+        <p id="questionNumber">Question 0 of 0</p>
+        <h3 id="questionText">Generate questions to begin.</h3>
+
+        <button id="speakBtn">Speak Question</button>
+        <button id="stopSpeakBtn">Stop Speaking</button>
+    </section>
+
+    <section>
+        <h2>Your Answer</h2>
+        <button id="startBtn">Start Microphone</button>
+        <button id="stopBtn" disabled>Stop Microphone</button>
+
+        <label for="answer">Recognized answer</label>
+        <textarea id="answer" rows="7"
+            placeholder="Your spoken answer will appear here..."></textarea>
+
+        <button id="clearBtn">Clear Answer</button>
+        <button id="nextBtn" disabled>Next Question</button>
+    </section>
+
+    <script>
+        const statusText = document.getElementById("status");
+        const questionText = document.getElementById("questionText");
+        const answer = document.getElementById("answer");
+
+        let questions = [];
+        let currentIndex = 0;
+        let recognition = null;
+        let listening = false;
+        let finalTranscript = "";
+
+        function displayQuestion() {
+            questionText.textContent = questions[currentIndex];
+            document.getElementById("questionNumber").textContent =
+                `Question ${currentIndex + 1} of ${questions.length}`;
+
+            answer.value = "";
+            finalTranscript = "";
+
+            document.getElementById("nextBtn").disabled =
+                currentIndex >= questions.length - 1;
+
+            speakQuestion();
+        }
+
+        function speakQuestion() {
+            if (!questions.length) return;
+
+            if (!("speechSynthesis" in window)) {
+                statusText.textContent = "Speech output is unsupported.";
+                return;
+            }
+
+            window.speechSynthesis.cancel();
+
+            const utterance = new SpeechSynthesisUtterance(
+                questions[currentIndex]
+            );
+            utterance.lang = "en-IN";
+
+            window.speechSynthesis.speak(utterance);
+        }
+
+        document.getElementById("generateBtn").onclick = async () => {
+            const role = document.getElementById("role").value.trim();
+            const skills = document.getElementById("skills").value
+                .split(",").map(s => s.trim()).filter(Boolean);
+
+            if (!role) {
+                statusText.textContent = "Enter a job role.";
+                return;
+            }
+
+            statusText.textContent = "Generating questions...";
+
+            try {
+                const response = await fetch("/generate-questions", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({role, skills})
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || "Question generation failed");
+                }
+
+                questions = data.questions || [];
+                currentIndex = 0;
+
+                if (!questions.length) {
+                    throw new Error("No questions returned.");
+                }
+
+                displayQuestion();
+                statusText.textContent = "Questions ready.";
+            } catch (error) {
+                statusText.textContent = error.message;
+            }
+        };
+
+        document.getElementById("speakBtn").onclick = speakQuestion;
+
+        document.getElementById("stopSpeakBtn").onclick = () => {
+            window.speechSynthesis.cancel();
+        };
+
+        document.getElementById("startBtn").onclick = () => {
+            const SpeechRecognition =
+                window.SpeechRecognition ||
+                window.webkitSpeechRecognition;
+
+            if (!SpeechRecognition) {
+                statusText.textContent =
+                    "Speech recognition is unavailable in this browser.";
+                return;
+            }
+
+            if (listening) return;
+
+            recognition = new SpeechRecognition();
+            recognition.lang = "en-IN";
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            finalTranscript = answer.value.trim();
+
+            recognition.onstart = () => {
+                listening = true;
+                statusText.textContent = "Listening...";
+                document.getElementById("startBtn").disabled = true;
+                document.getElementById("stopBtn").disabled = false;
+            };
+
+            recognition.onresult = event => {
+                let interim = "";
+
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const text = event.results[i][0].transcript;
+
+                    if (event.results[i].isFinal) {
+                        finalTranscript +=
+                            (finalTranscript ? " " : "") + text;
+                    } else {
+                        interim += text;
+                    }
+                }
+
+                answer.value = finalTranscript +
+                    (interim ? (finalTranscript ? " " : "") + interim : "");
+            };
+
+            recognition.onerror = event => {
+                statusText.textContent = "Speech error: " + event.error;
+            };
+
+            recognition.onend = () => {
+                listening = false;
+                document.getElementById("startBtn").disabled = false;
+                document.getElementById("stopBtn").disabled = true;
+
+                if (statusText.textContent === "Listening...") {
+                    statusText.textContent = "Recording stopped.";
+                }
+            };
+
+            recognition.start();
+        };
+
+        document.getElementById("stopBtn").onclick = () => {
+            if (recognition && listening) recognition.stop();
+        };
+
+        document.getElementById("clearBtn").onclick = () => {
+            if (recognition && listening) recognition.stop();
+            answer.value = "";
+            finalTranscript = "";
+        };
+
+        document.getElementById("nextBtn").onclick = () => {
+            if (listening) {
+                statusText.textContent = "Stop the microphone first.";
+                return;
+            }
+
+            if (currentIndex < questions.length - 1) {
+                currentIndex++;
+                displayQuestion();
+            }
+        };
+    </script>
+</body>
+</html>
