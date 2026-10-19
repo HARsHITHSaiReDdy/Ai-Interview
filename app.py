@@ -1,6 +1,6 @@
 
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request,  render_template
 import requests
 import re
 
@@ -99,6 +99,10 @@ Do not add headings or explanations.
             "error": f"Could not connect to Ollama: {error}"
         }), 503
 
+
+@app.route("/interview", methods=["GET"])
+def interview():
+    return render_template("interview.html")
 
 if __name__ == "__main__":
     app.run(debug=True)
