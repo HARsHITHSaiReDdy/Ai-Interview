@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Interviewer</title>
+
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -20,12 +21,22 @@
             padding: 24px;
             margin: 20px 0;
             border-radius: 12px;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
         }
 
         button {
             padding: 12px 16px;
             margin: 5px;
+            border: none;
+            border-radius: 7px;
+            background: #2457d6;
+            color: white;
             cursor: pointer;
+        }
+
+        button:disabled {
+            background: #aab4c5;
+            cursor: not-allowed;
         }
 
         textarea, input {
@@ -33,15 +44,65 @@
             width: 100%;
             padding: 12px;
             margin: 8px 0;
+            border: 1px solid #ccd3df;
+            border-radius: 7px;
+        }
+
+        .difficulty-card {
+            background: #eef3ff;
+            border-radius: 10px;
+            padding: 16px;
+            margin: 15px 0;
+        }
+
+        .difficulty-title {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .level-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            margin-top: 8px;
+            background: #2457d6;
+            color: white;
+            border-radius: 20px;
+            font-weight: bold;
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 10px;
+            background: #dce3ef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: #2457d6;
+            transition: width 0.3s ease;
+        }
+
+        #status {
+            color: #475569;
+        }
+
+        #questionText {
+            line-height: 1.6;
         }
     </style>
 </head>
+
 <body>
     <h1>AI Interviewer</h1>
     <p>Voice-enabled technical interview</p>
 
     <section>
         <h2>Configure Interview</h2>
+
         <label for="role">Job role</label>
         <input id="role" value="Java Developer">
 
@@ -53,8 +114,29 @@
     </section>
 
     <section>
-        <h2>Interview Question</h2>
+        <h2>Interview Progress</h2>
+
         <p id="questionNumber">Question 0 of 0</p>
+
+        <div class="progress-track">
+            <div id="progressFill" class="progress-fill"></div>
+        </div>
+
+        <div class="difficulty-card">
+            <div class="difficulty-title" id="difficultyName">
+                Level 1 - Very Easy
+            </div>
+
+            <span class="level-badge" id="difficultyBadge">
+                Difficulty 1/5
+            </span>
+
+            <p id="difficultyDescription">
+                Basic definitions and fundamental concepts.
+            </p>
+        </div>
+
+        <h2>Interview Question</h2>
         <h3 id="questionText">Generate questions to begin.</h3>
 
         <button id="speakBtn">Speak Question</button>
@@ -63,6 +145,7 @@
 
     <section>
         <h2>Your Answer</h2>
+
         <button id="startBtn">Start Microphone</button>
         <button id="stopBtn" disabled>Stop Microphone</button>
 
@@ -79,16 +162,63 @@
         const questionText = document.getElementById("questionText");
         const answer = document.getElementById("answer");
 
+        const difficultyNames = [
+            "Very Easy",
+            "Easy",
+            "Medium",
+            "Hard",
+            "Expert"
+        ];
+
+        const difficultyDescriptions = [
+            "Basic definitions and fundamental concepts.",
+            "Simple explanations and basic applications.",
+            "Practical problem-solving and implementation.",
+            "Complex scenarios and deeper technical reasoning.",
+            "Advanced architecture, optimization, and expert scenarios."
+        ];
+
         let questions = [];
         let currentIndex = 0;
         let recognition = null;
         let listening = false;
         let finalTranscript = "";
 
+        function getDifficulty(questionNumber) {
+            const level = Math.min(
+                Math.floor((questionNumber - 1) / 5) + 1,
+                5
+            );
+
+            return {
+                level: level,
+                name: difficultyNames[level - 1],
+                description: difficultyDescriptions[level - 1]
+            };
+        }
+
         function displayQuestion() {
+            if (!questions.length) return;
+
+            const questionNumber = currentIndex + 1;
+            const difficulty = getDifficulty(questionNumber);
+
             questionText.textContent = questions[currentIndex];
+
             document.getElementById("questionNumber").textContent =
-                `Question ${currentIndex + 1} of ${questions.length}`;
+                `Question ${questionNumber} of ${questions.length}`;
+
+            document.getElementById("difficultyName").textContent =
+                `Level ${difficulty.level} - ${difficulty.name}`;
+
+            document.getElementById("difficultyBadge").textContent =
+                `Difficulty ${difficulty.level}/5`;
+
+            document.getElementById("difficultyDescription").textContent =
+                difficulty.description;
+
+            document.getElementById("progressFill").style.width =
+                `${(questionNumber / questions.length) * 100}%`;
 
             answer.value = "";
             finalTranscript = "";
@@ -112,15 +242,18 @@
             const utterance = new SpeechSynthesisUtterance(
                 questions[currentIndex]
             );
-            utterance.lang = "en-IN";
 
+            utterance.lang = "en-IN";
             window.speechSynthesis.speak(utterance);
         }
 
         document.getElementById("generateBtn").onclick = async () => {
             const role = document.getElementById("role").value.trim();
+
             const skills = document.getElementById("skills").value
-                .split(",").map(s => s.trim()).filter(Boolean);
+                .split(",")
+                .map(skill => skill.trim())
+                .filter(Boolean);
 
             if (!role) {
                 statusText.textContent = "Enter a job role.";
@@ -128,18 +261,23 @@
             }
 
             statusText.textContent = "Generating questions...";
+            document.getElementById("generateBtn").disabled = true;
 
             try {
                 const response = await fetch("/generate-questions", {
                     method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({role, skills})
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ role, skills })
                 });
 
                 const data = await response.json();
 
                 if (!response.ok) {
-                    throw new Error(data.error || "Question generation failed");
+                    throw new Error(
+                        data.error || "Question generation failed"
+                    );
                 }
 
                 questions = data.questions || [];
@@ -150,9 +288,14 @@
                 }
 
                 displayQuestion();
-                statusText.textContent = "Questions ready.";
+
+                statusText.textContent =
+                    `${questions.length} questions ready.`;
+
             } catch (error) {
                 statusText.textContent = error.message;
+            } finally {
+                document.getElementById("generateBtn").disabled = false;
             }
         };
 
@@ -192,13 +335,13 @@
                 let interim = "";
 
                 for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const text = event.results[i][0].transcript;
+                    const transcript = event.results[i][0].transcript;
 
                     if (event.results[i].isFinal) {
                         finalTranscript +=
-                            (finalTranscript ? " " : "") + text;
+                            (finalTranscript ? " " : "") + transcript;
                     } else {
-                        interim += text;
+                        interim += transcript;
                     }
                 }
 
@@ -224,11 +367,16 @@
         };
 
         document.getElementById("stopBtn").onclick = () => {
-            if (recognition && listening) recognition.stop();
+            if (recognition && listening) {
+                recognition.stop();
+            }
         };
 
         document.getElementById("clearBtn").onclick = () => {
-            if (recognition && listening) recognition.stop();
+            if (recognition && listening) {
+                recognition.stop();
+            }
+
             answer.value = "";
             finalTranscript = "";
         };
@@ -242,6 +390,9 @@
             if (currentIndex < questions.length - 1) {
                 currentIndex++;
                 displayQuestion();
+                statusText.textContent = "Question loaded.";
+            } else {
+                statusText.textContent = "Interview questions completed.";
             }
         };
     </script>
