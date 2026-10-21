@@ -3,7 +3,7 @@ from flask import Flask, jsonify, request, render_template
 import requests
 import re
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="template")
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "qwen2.5:1.5b"
@@ -33,10 +33,7 @@ def get_difficulty(question_number):
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({
-        "message": "AI Interviewer API is running!",
-        "status": "success"
-    })
+    return render_template("interview.html")
 
 
 @app.route("/health", methods=["GET"])
@@ -67,7 +64,10 @@ def generate_questions():
     difficulty_plan = "\n".join(
         f"Questions {start}-{min(start + 4, TOTAL_QUESTIONS)}: "
         f"Level {level} - {DIFFICULTY_LEVELS[level]}"
-        for level, start in enumerate(range(1, TOTAL_QUESTIONS + 1, 5), start=1)
+        for level, start in enumerate(
+            range(1, TOTAL_QUESTIONS + 1, QUESTIONS_PER_LEVEL),
+            start=1
+        )
     )
 
     prompt = f"""
@@ -118,12 +118,14 @@ Requirements:
 
         for line in questions_text.splitlines():
             line = line.strip()
+
             line = re.sub(
-                r"^\s*(?:question\s*)?\d+\s*[\.\):\-]\s*",
+                r"^(?:question\s*)?\d+\s*[.):\-]\s*",
                 "",
                 line,
                 flags=re.IGNORECASE
             )
+
             line = line.strip().strip('"').strip("'").strip("*").strip()
 
             if line:
