@@ -88,6 +88,7 @@
 
         #status {
             color: #475569;
+            overflow-wrap: anywhere;
         }
 
         #questionText {
@@ -110,7 +111,7 @@
         <input id="skills" value="Java, SQL, OOP">
 
         <button id="generateBtn">Generate Questions</button>
-        <p id="status">Ready</p>
+        <p id="status" role="status" aria-live="polite">Ready</p>
     </section>
 
     <section>
@@ -161,13 +162,11 @@
         const statusText = document.getElementById("status");
         const questionText = document.getElementById("questionText");
         const answer = document.getElementById("answer");
+        const generateBtn = document.getElementById("generateBtn");
+        const nextBtn = document.getElementById("nextBtn");
 
         const difficultyNames = [
-            "Very Easy",
-            "Easy",
-            "Medium",
-            "Hard",
-            "Expert"
+            "Very Easy", "Easy", "Medium", "Hard", "Expert"
         ];
 
         const difficultyDescriptions = [
@@ -179,6 +178,7 @@
         ];
 
         let questions = [];
+        let questionDetails = [];
         let currentIndex = 0;
         let recognition = null;
         let listening = false;
@@ -191,7 +191,7 @@
             );
 
             return {
-                level: level,
+                level,
                 name: difficultyNames[level - 1],
                 description: difficultyDescriptions[level - 1]
             };
@@ -201,7 +201,15 @@
             if (!questions.length) return;
 
             const questionNumber = currentIndex + 1;
-            const difficulty = getDifficulty(questionNumber);
+
+            // Prefer difficulty metadata returned by Flask.
+            const serverDetails = questionDetails[currentIndex];
+            const difficulty = serverDetails?.difficulty
+                ? {
+                    ...getDifficulty(questionNumber),
+                    ...serverDetails.difficulty
+                }
+                : getDifficulty(questionNumber);
 
             questionText.textContent = questions[currentIndex];
 
@@ -215,7 +223,8 @@
                 `Difficulty ${difficulty.level}/5`;
 
             document.getElementById("difficultyDescription").textContent =
-                difficulty.description;
+                difficulty.description ||
+                difficultyDescriptions[difficulty.level - 1];
 
             document.getElementById("progressFill").style.width =
                 `${(questionNumber / questions.length) * 100}%`;
@@ -223,17 +232,21 @@
             answer.value = "";
             finalTranscript = "";
 
-            document.getElementById("nextBtn").disabled =
-                currentIndex >= questions.length - 1;
+            nextBtn.disabled = currentIndex >= questions.length - 1;
+            nextBtn.textContent = "Next Question";
 
             speakQuestion();
         }
 
         function speakQuestion() {
-            if (!questions.length) return;
+            if (!questions.length) {
+                statusText.textContent = "Generate questions first.";
+                return;
+            }
 
             if (!("speechSynthesis" in window)) {
-                statusText.textContent = "Speech output is unsupported.";
+                statusText.textContent =
+                    "Speech output is unsupported in this browser.";
                 return;
             }
 
@@ -247,7 +260,7 @@
             window.speechSynthesis.speak(utterance);
         }
 
-        document.getElementById("generateBtn").onclick = async () => {
+        generateBtn.onclick = async () => {
             const role = document.getElementById("role").value.trim();
 
             const skills = document.getElementById("skills").value
@@ -260,32 +273,67 @@
                 return;
             }
 
-            statusText.textContent = "Generating questions...";
-            document.getElementById("generateBtn").disabled = true;
+            if (listening && recognition) {
+                recognition.stop();
+            }
+
+            if ("speechSynthesis" in window) {
+                window.speechSynthesis.cancel();
+            }
+
+            generateBtn.disabled = true;
+            statusText.textContent = "Generating questions... This may take a few minutes.";
 
             try {
+                // Relative URL works when Flask serves this page.
                 const response = await fetch("/generate-questions", {
                     method: "POST",
                     headers: {
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
                     },
                     body: JSON.stringify({ role, skills })
                 });
 
-                const data = await response.json();
+                // Read text first so a plain-text 403 does not cause
+                // an "Unexpected token F" JSON parsing error.
+                const responseText = await response.text();
+                let data;
 
-                if (!response.ok) {
+                try {
+                    data = JSON.parse(responseText);
+                } catch {
+                    if (response.status === 403) {
+                        throw new Error(
+                            "403 Forbidden: the server rejected this request. " +
+                            "Open the page at http://127.0.0.1:5000/ " +
+                            "and ensure Flask is running."
+                        );
+                    }
+
                     throw new Error(
-                        data.error || "Question generation failed"
+                        `The server returned a non-JSON response (HTTP ${response.status}). ` +
+                        responseText.slice(0, 180)
                     );
                 }
 
-                questions = data.questions || [];
-                currentIndex = 0;
-
-                if (!questions.length) {
-                    throw new Error("No questions returned.");
+                if (!response.ok) {
+                    throw new Error(
+                        data.error || `Request failed: HTTP ${response.status}`
+                    );
                 }
+
+                if (!Array.isArray(data.questions) ||
+                    data.questions.length === 0) {
+                    throw new Error("No questions were returned by the AI.");
+                }
+
+                questions = data.questions;
+                questionDetails = Array.isArray(data.question_details)
+                    ? data.question_details
+                    : [];
+
+                currentIndex = 0;
 
                 displayQuestion();
 
@@ -294,15 +342,18 @@
 
             } catch (error) {
                 statusText.textContent = error.message;
+                console.error("Question generation error:", error);
             } finally {
-                document.getElementById("generateBtn").disabled = false;
+                generateBtn.disabled = false;
             }
         };
 
         document.getElementById("speakBtn").onclick = speakQuestion;
 
         document.getElementById("stopSpeakBtn").onclick = () => {
-            window.speechSynthesis.cancel();
+            if ("speechSynthesis" in window) {
+                window.speechSynthesis.cancel();
+            }
         };
 
         document.getElementById("startBtn").onclick = () => {
@@ -312,7 +363,7 @@
 
             if (!SpeechRecognition) {
                 statusText.textContent =
-                    "Speech recognition is unavailable in this browser.";
+                    "Speech recognition is unavailable. Try a supported browser such as Chrome.";
                 return;
             }
 
@@ -322,6 +373,7 @@
             recognition.lang = "en-IN";
             recognition.continuous = true;
             recognition.interimResults = true;
+
             finalTranscript = answer.value.trim();
 
             recognition.onstart = () => {
@@ -346,7 +398,9 @@
                 }
 
                 answer.value = finalTranscript +
-                    (interim ? (finalTranscript ? " " : "") + interim : "");
+                    (interim
+                        ? (finalTranscript ? " " : "") + interim
+                        : "");
             };
 
             recognition.onerror = event => {
@@ -358,12 +412,19 @@
                 document.getElementById("startBtn").disabled = false;
                 document.getElementById("stopBtn").disabled = true;
 
+                finalTranscript = answer.value.trim();
+
                 if (statusText.textContent === "Listening...") {
                     statusText.textContent = "Recording stopped.";
                 }
             };
 
-            recognition.start();
+            try {
+                recognition.start();
+            } catch (error) {
+                statusText.textContent =
+                    "Could not start microphone: " + error.message;
+            }
         };
 
         document.getElementById("stopBtn").onclick = () => {
@@ -381,7 +442,7 @@
             finalTranscript = "";
         };
 
-        document.getElementById("nextBtn").onclick = () => {
+        nextBtn.onclick = () => {
             if (listening) {
                 statusText.textContent = "Stop the microphone first.";
                 return;
@@ -391,8 +452,11 @@
                 currentIndex++;
                 displayQuestion();
                 statusText.textContent = "Question loaded.";
-            } else {
-                statusText.textContent = "Interview questions completed.";
+            }
+
+            if (currentIndex === questions.length - 1) {
+                nextBtn.disabled = true;
+                nextBtn.textContent = "Interview Questions Completed";
             }
         };
     </script>
