@@ -126,6 +126,43 @@ def generate_from_ollama(prompt, token_limit):
     return response.json().get("response", "").strip()
 
 
+def technical_fallback_questions(role, skills, level):
+    skill = skills[0] if skills else role
+    questions_by_level = {
+        1: [
+            f"What does {skill} mean, and what is one basic use for it in a {role} role?",
+            f"What basic problem does {skill} help solve in work as a {role}?",
+            f"Where might a {role} use {skill} in a simple day-to-day task?",
+            f"What is one basic concept a {role} should understand about {skill}?"
+        ],
+        2: [
+            f"How would you use {skill} to complete a typical task in a {role} role?",
+            f"When would you choose {skill} over an alternative for a {role} task, and why?",
+            f"What steps would you take to apply {skill} to a routine {role} assignment?",
+            f"How would you compare two simple ways of using {skill} for a {role} task?"
+        ],
+        3: [
+            f"How would you use {skill} to solve a practical {role} problem with multiple requirements?",
+            f"How would you test a {skill}-based solution before releasing it in a {role} project?",
+            f"How would you break down a multi-step {role} problem and solve it using {skill}?",
+            f"How would you investigate an unexpected result in a {role} task involving {skill}?"
+        ],
+        4: [
+            f"How would you diagnose a difficult production issue related to {skill} while minimizing impact?",
+            f"How would you redesign a {skill}-based system to improve reliability under rising load?",
+            f"How would you evaluate competing fixes for a serious {skill}-related issue in a {role} system?",
+            f"How would you prevent a complex failure involving {skill} from recurring in production?"
+        ],
+        5: [
+            f"How would you assess the architectural trade-offs of using {skill} at scale in a {role} system?",
+            f"What constraints would make you avoid {skill} in a large-scale {role} architecture, and what would you use instead?",
+            f"How would you design a long-term {role} architecture around {skill} while managing scale and reliability?",
+            f"How would you decide whether to replace {skill} in a mature {role} system with stricter performance constraints?"
+        ]
+    }
+    return questions_by_level[level]
+
+
 def generate_technical_questions(role, skills, topic_text):
     questions = []
     seen = set()
@@ -205,11 +242,34 @@ Already generated questions; do not repeat or rephrase them:
 
     if len(questions) != len(difficulty_plan):
         app.logger.warning(
-            "Question model returned %d unique technical questions; expected %d.",
+            "Question model returned %d unique technical questions; filling the remaining %d with role-specific fallbacks.",
             len(questions),
-            len(difficulty_plan)
+            len(difficulty_plan) - len(questions)
         )
-        return None
+        for index in range(len(questions), len(difficulty_plan)):
+            level, level_name, _ = difficulty_plan[index]
+            candidates = technical_fallback_questions(
+                role,
+                skills,
+                level
+            )
+            question = next(
+                (
+                    candidate for candidate in candidates
+                    if normalize_question(candidate) not in seen
+                ),
+                None
+            )
+            if question is None:
+                app.logger.error(
+                    "No unique fallback question available for difficulty level %s.",
+                    level_name
+                )
+                return None
+            normalized = normalize_question(question)
+            seen.add(normalized)
+            questions.append(question)
+
     return [
         {
             "question": question,
@@ -292,7 +352,28 @@ def generate_mixed_questions(role, skills, topic_text):
             random.randrange(len(categorized_questions) + 1),
             question
         )
-    return categorized_questions
+
+    unique_questions = []
+    seen_questions = set()
+    for item in categorized_questions:
+        normalized = normalize_question(item["question"])
+        if not normalized or normalized in seen_questions:
+            app.logger.warning(
+                "Discarding duplicate or empty question in category %s.",
+                item["category"]
+            )
+            return None
+        seen_questions.add(normalized)
+        unique_questions.append(item)
+
+    if len(unique_questions) != TOTAL_QUESTIONS:
+        app.logger.error(
+            "Question set contains %d unique questions; expected %d.",
+            len(unique_questions),
+            TOTAL_QUESTIONS
+        )
+        return None
+    return unique_questions
 
 
 @app.route("/", methods=["GET"])
@@ -338,13 +419,23 @@ def generate_questions():
 
     try:
         questions = generate_mixed_questions(role, skills, topic_text)
+        unique_question_count = len({
+            normalize_question(item["question"])
+            for item in questions or []
+            if item.get("question")
+        })
 
-        if questions is None or len(questions) != TOTAL_QUESTIONS:
+        if (
+            questions is None
+            or len(questions) != TOTAL_QUESTIONS
+            or unique_question_count != TOTAL_QUESTIONS
+        ):
             return jsonify({
                 "error": (
-                    "The model did not return all 10 unique technical questions "
-                    "in the expected format. Click Try Again to generate a new set."
+                    "Could not prepare 25 unique interview questions. "
+                    "Please try generating a new set."
                 ),
+                "generated_count": unique_question_count,
                 "required_count": TOTAL_QUESTIONS,
                 "retry": True
             }), 502
