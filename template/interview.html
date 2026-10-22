@@ -1,12 +1,11 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Interviewer</title>
-
     <style>
+        * { box-sizing: border-box; }
         body {
             font-family: Arial, sans-serif;
             max-width: 800px;
@@ -15,7 +14,6 @@
             background: #f3f5f9;
             color: #202938;
         }
-
         section {
             background: white;
             padding: 24px;
@@ -23,7 +21,6 @@
             border-radius: 12px;
             box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
         }
-
         button {
             padding: 12px 16px;
             margin: 5px;
@@ -33,77 +30,46 @@
             color: white;
             cursor: pointer;
         }
-
-        button:disabled {
-            background: #aab4c5;
-            cursor: not-allowed;
-        }
-
+        button:disabled { background: #aab4c5; cursor: not-allowed; }
         textarea, input {
-            box-sizing: border-box;
             width: 100%;
             padding: 12px;
             margin: 8px 0;
             border: 1px solid #ccd3df;
             border-radius: 7px;
+            font: inherit;
         }
-
-        .difficulty-card {
-            background: #eef3ff;
-            border-radius: 10px;
-            padding: 16px;
-            margin: 15px 0;
-        }
-
-        .difficulty-title {
-            font-size: 18px;
-            font-weight: bold;
-        }
-
-        .level-badge {
-            display: inline-block;
-            padding: 6px 12px;
-            margin-top: 8px;
-            background: #2457d6;
-            color: white;
-            border-radius: 20px;
-            font-weight: bold;
-        }
-
+        #status { color: #475569; overflow-wrap: anywhere; }
+        #questionText { line-height: 1.6; font-weight: 600; }
+        #questionNumber { font-size: 1.25rem; font-weight: 700; }
+        #questionCategory { color: #475569; font-weight: 600; }
         .progress-track {
             width: 100%;
             height: 10px;
             background: #dce3ef;
             border-radius: 10px;
             overflow: hidden;
-            margin-top: 12px;
+            margin: 12px 0 20px;
         }
-
         .progress-fill {
             height: 100%;
             width: 0%;
             background: #2457d6;
             transition: width 0.3s ease;
         }
-
-        #status {
-            color: #475569;
-            overflow-wrap: anywhere;
-        }
-
-        #questionText {
-            line-height: 1.6;
+        @media (max-width: 600px) {
+            body { margin: 12px auto; padding: 12px; }
+            section { padding: 18px; }
+            button { width: 100%; margin: 5px 0; }
         }
     </style>
 </head>
-
-<body>
+<body data-generate-url="{{ url_for('generate_questions') }}">
     <h1>AI Interviewer</h1>
-    <p>Voice-enabled technical interview</p>
+    <p>Voice-enabled interview questions tailored to your role and skills, mixed with HR, project, and casual questions.</p>
 
     <section>
         <h2>Configure Interview</h2>
-
         <label for="role">Job role</label>
         <input id="role" value="Java Developer">
 
@@ -116,25 +82,10 @@
 
     <section>
         <h2>Interview Progress</h2>
-
         <p id="questionNumber">Question 0 of 0</p>
-
+        <p id="questionCategory"></p>
         <div class="progress-track">
             <div id="progressFill" class="progress-fill"></div>
-        </div>
-
-        <div class="difficulty-card">
-            <div class="difficulty-title" id="difficultyName">
-                Level 1 - Very Easy
-            </div>
-
-            <span class="level-badge" id="difficultyBadge">
-                Difficulty 1/5
-            </span>
-
-            <p id="difficultyDescription">
-                Basic definitions and fundamental concepts.
-            </p>
         </div>
 
         <h2>Interview Question</h2>
@@ -146,7 +97,6 @@
 
     <section>
         <h2>Your Answer</h2>
-
         <button id="startBtn">Start Microphone</button>
         <button id="stopBtn" disabled>Stop Microphone</button>
 
@@ -164,77 +114,58 @@
         const answer = document.getElementById("answer");
         const generateBtn = document.getElementById("generateBtn");
         const nextBtn = document.getElementById("nextBtn");
-
-        const difficultyNames = [
-            "Very Easy", "Easy", "Medium", "Hard", "Expert"
-        ];
-
-        const difficultyDescriptions = [
-            "Basic definitions and fundamental concepts.",
-            "Simple explanations and basic applications.",
-            "Practical problem-solving and implementation.",
-            "Complex scenarios and deeper technical reasoning.",
-            "Advanced architecture, optimization, and expert scenarios."
-        ];
+        const questionNumberText = document.getElementById("questionNumber");
+        const questionCategoryText = document.getElementById("questionCategory");
+        const progressFill = document.getElementById("progressFill");
+        const startBtn = document.getElementById("startBtn");
+        const stopBtn = document.getElementById("stopBtn");
+        const generateUrl = document.body.dataset.generateUrl;
 
         let questions = [];
         let questionDetails = [];
         let currentIndex = 0;
         let recognition = null;
+        let microphoneStream = null;
         let listening = false;
         let finalTranscript = "";
 
-        function getDifficulty(questionNumber) {
-            const level = Math.min(
-                Math.floor((questionNumber - 1) / 5) + 1,
-                5
-            );
+        function pageIsOpenedDirectly() {
+            return window.location.protocol === "file:" || !generateUrl.startsWith("/");
+        }
 
-            return {
-                level,
-                name: difficultyNames[level - 1],
-                description: difficultyDescriptions[level - 1]
-            };
+        if (pageIsOpenedDirectly()) {
+            statusText.textContent =
+                "This page was opened as a local file, so it cannot connect to app.py. Start the Flask app with `python Python\\app.py`, then open http://127.0.0.1:5000.";
+        }
+
+        function stopQuestionSpeech() {
+            if ("speechSynthesis" in window) {
+                window.speechSynthesis.cancel();
+            }
         }
 
         function displayQuestion() {
             if (!questions.length) return;
 
-            const questionNumber = currentIndex + 1;
-
-            // Prefer difficulty metadata returned by Flask.
-            const serverDetails = questionDetails[currentIndex];
-            const difficulty = serverDetails?.difficulty
-                ? {
-                    ...getDifficulty(questionNumber),
-                    ...serverDetails.difficulty
-                }
-                : getDifficulty(questionNumber);
-
+            stopQuestionSpeech();
+            const number = currentIndex + 1;
             questionText.textContent = questions[currentIndex];
-
-            document.getElementById("questionNumber").textContent =
-                `Question ${questionNumber} of ${questions.length}`;
-
-            document.getElementById("difficultyName").textContent =
-                `Level ${difficulty.level} - ${difficulty.name}`;
-
-            document.getElementById("difficultyBadge").textContent =
-                `Difficulty ${difficulty.level}/5`;
-
-            document.getElementById("difficultyDescription").textContent =
-                difficulty.description ||
-                difficultyDescriptions[difficulty.level - 1];
-
-            document.getElementById("progressFill").style.width =
-                `${(questionNumber / questions.length) * 100}%`;
+            questionNumberText.textContent = `Question ${number} of ${questions.length}`;
+            const detail = questionDetails[currentIndex];
+            questionCategoryText.textContent = detail?.difficulty
+                ? `${detail.category} - ${detail.difficulty.name}`
+                : detail?.category || "";
+            progressFill.style.width = `${(number / questions.length) * 100}%`;
 
             answer.value = "";
             finalTranscript = "";
-
             nextBtn.disabled = currentIndex >= questions.length - 1;
-            nextBtn.textContent = "Next Question";
+            nextBtn.textContent = currentIndex === questions.length - 1
+                ? "Interview Questions Completed"
+                : "Next Question";
 
+            // Questions are generated together before the interview starts,
+            // so the next question is already available and navigation is instant.
             speakQuestion();
         }
 
@@ -243,50 +174,41 @@
                 statusText.textContent = "Generate questions first.";
                 return;
             }
-
             if (!("speechSynthesis" in window)) {
-                statusText.textContent =
-                    "Speech output is unsupported in this browser.";
+                statusText.textContent = "Speech output is unsupported in this browser.";
                 return;
             }
-
-            window.speechSynthesis.cancel();
-
-            const utterance = new SpeechSynthesisUtterance(
-                questions[currentIndex]
-            );
-
+            stopQuestionSpeech();
+            const utterance = new SpeechSynthesisUtterance(questions[currentIndex]);
             utterance.lang = "en-IN";
             window.speechSynthesis.speak(utterance);
         }
 
         generateBtn.onclick = async () => {
-            const role = document.getElementById("role").value.trim();
+            if (pageIsOpenedDirectly()) {
+                statusText.textContent =
+                    "Question generation needs the Flask server. Run `python Python\\app.py` and open http://127.0.0.1:5000.";
+                return;
+            }
 
+            const role = document.getElementById("role").value.trim();
             const skills = document.getElementById("skills").value
-                .split(",")
-                .map(skill => skill.trim())
-                .filter(Boolean);
+                .split(",").map(skill => skill.trim()).filter(Boolean);
 
             if (!role) {
                 statusText.textContent = "Enter a job role.";
                 return;
             }
 
-            if (listening && recognition) {
-                recognition.stop();
-            }
-
-            if ("speechSynthesis" in window) {
-                window.speechSynthesis.cancel();
-            }
-
+            if (listening && recognition) recognition.stop();
+            stopQuestionSpeech();
             generateBtn.disabled = true;
-            statusText.textContent = "Generating questions... This may take a few minutes.";
+            nextBtn.disabled = true;
+            statusText.textContent =
+                "Generating 25 mixed questions, with technical questions across five difficulty levels. This may take a few minutes...";
 
             try {
-                // Relative URL works when Flask serves this page.
-                const response = await fetch("/generate-questions", {
+                const response = await fetch(generateUrl, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -295,22 +217,11 @@
                     body: JSON.stringify({ role, skills })
                 });
 
-                // Read text first so a plain-text 403 does not cause
-                // an "Unexpected token F" JSON parsing error.
                 const responseText = await response.text();
                 let data;
-
                 try {
                     data = JSON.parse(responseText);
                 } catch {
-                    if (response.status === 403) {
-                        throw new Error(
-                            "403 Forbidden: the server rejected this request. " +
-                            "Open the page at http://127.0.0.1:5000/ " +
-                            "and ensure Flask is running."
-                        );
-                    }
-
                     throw new Error(
                         `The server returned a non-JSON response (HTTP ${response.status}). ` +
                         responseText.slice(0, 180)
@@ -318,30 +229,31 @@
                 }
 
                 if (!response.ok) {
-                    throw new Error(
-                        data.error || `Request failed: HTTP ${response.status}`
-                    );
+                    throw new Error(data.error || `Request failed: HTTP ${response.status}`);
                 }
-
-                if (!Array.isArray(data.questions) ||
-                    data.questions.length === 0) {
-                    throw new Error("No questions were returned by the AI.");
+                if (!Array.isArray(data.questions) || data.questions.length !== 25) {
+                    throw new Error("The server did not return exactly 25 questions.");
+                }
+                if (!Array.isArray(data.question_details) ||
+                    data.question_details.length !== data.questions.length ||
+                    data.question_details.some(detail =>
+                        !detail.category ||
+                        (["Role and skills", "Project experience"].includes(detail.category) &&
+                            !detail.difficulty?.name)
+                    )) {
+                    throw new Error("The server returned incomplete question categories or difficulty levels.");
                 }
 
                 questions = data.questions;
-                questionDetails = Array.isArray(data.question_details)
-                    ? data.question_details
-                    : [];
-
+                questionDetails = data.question_details;
                 currentIndex = 0;
-
                 displayQuestion();
-
                 statusText.textContent =
-                    `${questions.length} questions ready.`;
-
+                    `25 mixed questions for ${data.role || role} are ready. Only one question is shown at a time.`;
             } catch (error) {
-                statusText.textContent = error.message;
+                statusText.textContent = error instanceof TypeError
+                    ? "Could not reach the Flask app. Make sure it is running, then reload this page from http://127.0.0.1:5000."
+                    : error.message;
                 console.error("Question generation error:", error);
             } finally {
                 generateBtn.disabled = false;
@@ -349,95 +261,114 @@
         };
 
         document.getElementById("speakBtn").onclick = speakQuestion;
+        document.getElementById("stopSpeakBtn").onclick = stopQuestionSpeech;
 
-        document.getElementById("stopSpeakBtn").onclick = () => {
-            if ("speechSynthesis" in window) {
-                window.speechSynthesis.cancel();
+        function stopMicrophoneTracks() {
+            if (microphoneStream) {
+                microphoneStream.getTracks().forEach(track => track.stop());
+                microphoneStream = null;
             }
-        };
+        }
 
-        document.getElementById("startBtn").onclick = () => {
+        startBtn.onclick = async () => {
             const SpeechRecognition =
-                window.SpeechRecognition ||
-                window.webkitSpeechRecognition;
+                window.SpeechRecognition || window.webkitSpeechRecognition;
 
             if (!SpeechRecognition) {
                 statusText.textContent =
                     "Speech recognition is unavailable. Try a supported browser such as Chrome.";
                 return;
             }
-
+            if (!navigator.mediaDevices?.getUserMedia) {
+                statusText.textContent =
+                    "Microphone access is unavailable in this browser context. Open the app through http://127.0.0.1:5000 or use a secure HTTPS page.";
+                return;
+            }
             if (listening) return;
 
-            recognition = new SpeechRecognition();
-            recognition.lang = "en-IN";
-            recognition.continuous = true;
-            recognition.interimResults = true;
+            startBtn.disabled = true;
+            statusText.textContent = "Requesting microphone access...";
+            try {
+                microphoneStream = await navigator.mediaDevices.getUserMedia({
+                    audio: true
+                });
 
-            finalTranscript = answer.value.trim();
-
-            recognition.onstart = () => {
-                listening = true;
-                statusText.textContent = "Listening...";
-                document.getElementById("startBtn").disabled = true;
-                document.getElementById("stopBtn").disabled = false;
-            };
-
-            recognition.onresult = event => {
-                let interim = "";
-
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-
-                    if (event.results[i].isFinal) {
-                        finalTranscript +=
-                            (finalTranscript ? " " : "") + transcript;
-                    } else {
-                        interim += transcript;
-                    }
-                }
-
-                answer.value = finalTranscript +
-                    (interim
-                        ? (finalTranscript ? " " : "") + interim
-                        : "");
-            };
-
-            recognition.onerror = event => {
-                statusText.textContent = "Speech error: " + event.error;
-            };
-
-            recognition.onend = () => {
-                listening = false;
-                document.getElementById("startBtn").disabled = false;
-                document.getElementById("stopBtn").disabled = true;
-
+                recognition = new SpeechRecognition();
+                recognition.lang = "en-IN";
+                recognition.continuous = true;
+                recognition.interimResults = true;
                 finalTranscript = answer.value.trim();
 
-                if (statusText.textContent === "Listening...") {
-                    statusText.textContent = "Recording stopped.";
-                }
-            };
+                recognition.onstart = () => {
+                    listening = true;
+                    statusText.textContent = "Listening...";
+                    stopBtn.disabled = false;
+                };
 
-            try {
+                recognition.onresult = event => {
+                    let interim = "";
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        const transcript = event.results[i][0].transcript;
+                        if (event.results[i].isFinal) {
+                            finalTranscript += (finalTranscript ? " " : "") + transcript;
+                        } else {
+                            interim += transcript;
+                        }
+                    }
+                    answer.value = finalTranscript +
+                        (interim ? (finalTranscript ? " " : "") + interim : "");
+                };
+
+                recognition.onerror = event => {
+                    const messages = {
+                        "not-allowed": "Microphone permission was denied. Allow microphone access for this site in your browser settings.",
+                        "service-not-allowed": "The browser blocked its speech-recognition service. Allow speech recognition in browser settings.",
+                        "audio-capture": "No working microphone was found. Check that a microphone is connected and enabled.",
+                        "network": "Microphone access is working, but Chrome's speech-recognition service could not connect. Speech recognition needs an internet connection; reconnect and try again, or type your answer instead.",
+                        "no-speech": "No speech was detected. Try again and speak closer to the microphone."
+                    };
+                    statusText.textContent = messages[event.error] ||
+                        `Speech recognition error (${event.error}). You can type your answer instead.`;
+                    if (event.error !== "no-speech") {
+                        listening = false;
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                    }
+                };
+
+                recognition.onend = () => {
+                    listening = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    stopMicrophoneTracks();
+                    finalTranscript = answer.value.trim();
+                    if (statusText.textContent === "Listening...") {
+                        statusText.textContent = "Recording stopped.";
+                    }
+                };
+
                 recognition.start();
             } catch (error) {
-                statusText.textContent =
-                    "Could not start microphone: " + error.message;
+                stopMicrophoneTracks();
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                const messages = {
+                    NotAllowedError: "Microphone permission was denied. Allow microphone access for this site in your browser settings.",
+                    NotFoundError: "No microphone was found. Connect or enable a microphone and try again.",
+                    NotReadableError: "The microphone is busy or unavailable. Close other apps using it and try again."
+                };
+                statusText.textContent = messages[error.name] ||
+                    `Could not start microphone: ${error.message}`;
             }
         };
 
-        document.getElementById("stopBtn").onclick = () => {
-            if (recognition && listening) {
-                recognition.stop();
-            }
+        stopBtn.onclick = () => {
+            if (recognition && listening) recognition.stop();
         };
 
         document.getElementById("clearBtn").onclick = () => {
-            if (recognition && listening) {
-                recognition.stop();
-            }
-
+            if (recognition && listening) recognition.stop();
+            else stopMicrophoneTracks();
             answer.value = "";
             finalTranscript = "";
         };
@@ -447,16 +378,15 @@
                 statusText.textContent = "Stop the microphone first.";
                 return;
             }
-
             if (currentIndex < questions.length - 1) {
                 currentIndex++;
                 displayQuestion();
                 statusText.textContent = "Question loaded.";
             }
-
             if (currentIndex === questions.length - 1) {
                 nextBtn.disabled = true;
                 nextBtn.textContent = "Interview Questions Completed";
+                statusText.textContent = "You have reached the final question.";
             }
         };
     </script>
